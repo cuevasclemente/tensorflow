@@ -16,6 +16,7 @@
 from __future__ import absolute_import
 from __future__ import print_function
 
+
 import collections
 import math
 import os
@@ -60,34 +61,44 @@ print('Data size', len(words))
 vocabulary_size = 50000
 
 def build_dataset(words):
-  count = [['UNK', -1]]
-  count.extend(collections.Counter(words).most_common(vocabulary_size - 1))
-  dictionary = dict()
-  for word, _ in count:
-    dictionary[word] = len(dictionary)
-  data = list()
-  unk_count = 0
-  for word in words:
-    if word in dictionary:
-      index = dictionary[word]
-    else:
-      index = 0  # dictionary['UNK']
-      unk_count += 1
-    data.append(index)
-  count[0][1] = unk_count
-  reverse_dictionary = dict(zip(dictionary.values(), dictionary.keys()))
-  return data, count, dictionary, reverse_dictionary
+    """
+    build the dataset of integerized tokens
+    from a list of tokens, a counter
+    with the counts for each word, and the 
+    dictionaries that allow lookup from
+    token to integerized token.
+
+    words -- The list of words to construct
+    a dataset out of
+    """
+    count = [['UNK', -1]]
+    count.extend(collections.Counter(words).most_common(vocabulary_size - 1))
+    dictionary = dict()
+    for word, _ in count:
+        dictionary[word] = len(dictionary)
+    data = list()
+    unk_count = 0
+    for word in words:
+        if word in dictionary:
+            index = dictionary[word]
+        else:
+            index = 0  # dictionary['UNK']
+            unk_count += 1
+        data.append(index)
+    count[0][1] = unk_count
+    reverse_dictionary = dict(zip(dictionary.values(), dictionary.keys()))
+    return data, count, dictionary, reverse_dictionary
 
 data, count, dictionary, reverse_dictionary = build_dataset(words)
 del words  # Hint to reduce memory.
 print('Most common words (+UNK)', count[:5])
 print('Sample data', data[:10])
 
+data = data[0:20]
 data_index = 0
 
-
 # Step 3: Function to generate a training batch for the skip-gram model.
-def generate_batch(batch_size, num_skips, skip_window):
+def generate_batch_2(batch_size, num_skips, skip_window):
   global data_index
   assert batch_size % num_skips == 0
   assert num_skips <= 2 * skip_window
@@ -111,17 +122,76 @@ def generate_batch(batch_size, num_skips, skip_window):
     data_index = (data_index + 1) % len(data)
   return batch, labels
 
-batch, labels = generate_batch(batch_size=8, num_skips=2, skip_window=1)
-for i in range(8):
-  print(batch[i], '->', labels[i, 0])
-  print(reverse_dictionary[batch[i]], '->', reverse_dictionary[labels[i, 0]])
+
+def generate_batch(data, batch_size, skip_window, num_skips, data_index=0):
+    """
+    Generate a batch of tokenized strings along with their
+    labelled contexts.
+
+    data: the input data of tokenized strings
+
+    batch_size: the size of the batch to return, 
+    i.e: the number of examples and associated contexts
+
+    skip_window: the number of tokens on either side of
+    a given window to consider for possible inclusion
+    as a skip in determining a token's context
+
+    num_skips: the number of skips to include for each
+    token in the batch. If batch_size is 8 and num_skips
+    is 1, then there will be 8 different tokens from 
+    data and in the batch and each token will have one
+    other token as its context. If the batch_size is
+    8 and num_skips is 4, there will be 2 different
+    tokens from data in the batch and each token
+    will have four other tokens as its context.
+    """
+    assert batch_size % num_skips == 0
+    assert num_skips <= 2 * skip_window
+    assert num_skips < len(data)
+    # span = 2 * skip_window + 1 # [ skip_window target skip_window ]
+    while True:
+        batch = np.ndarray(shape=(batch_size), dtype=np.int32)
+        labels = np.ndarray(shape=(batch_size, 1), dtype=np.int32)
+        for i in range(batch_size // num_skips):
+            element_index = data_index+skip_window+i
+            buf = data[element_index-skip_window:element_index+skip_window+1]
+            if len(buf)-1 < num_skips:
+                data_index = (data_index+1+(batch_size//num_skips)+num_skips) % len(data)-1
+                i = i-1
+                continue
+            skips = random.sample(buf[0:skip_window]+
+                    buf[skip_window+1:],
+                    num_skips)
+            print(element_index)
+            print(len(data))
+            element = data[element_index]
+            for j in range(num_skips):
+                batch[i*num_skips+j] = element
+                labels[i*num_skips+j] = skips[j]
+        data_index = (data_index+1+(batch_size//num_skips)+num_skips) % len(data) -1
+        yield (batch, labels)
+
+
+g = generate_batch(data, batch_size=8, num_skips=2, skip_window=1)
+for i in range(20):
+    batch, labels = generate_batch_2(batch_size=8, num_skips=2, skip_window=1)
+    print("Tensorflow")
+    print(batch)
+    print(labels)
+    print("Clemente yo")
+    batch, labels = next(g)
+    print(batch)
+    print(labels)
+    print(data)
+
 
 # Step 4: Build and train a skip-gram model.
 
 batch_size = 128
 embedding_size = 128  # Dimension of the embedding vector.
-skip_window = 1       # How many words to consider left and right.
-num_skips = 2         # How many times to reuse an input to generate a label.
+skip_window = 2       # How many words to consider left and right.
+num_skips = 3         # How many times to reuse an input to generate a label.
 
 # We pick a random validation set to sample nearest neighbors. Here we limit the
 # validation samples to the words that have a low numeric ID, which by
@@ -180,9 +250,9 @@ with tf.Session(graph=graph) as session:
   print("Initialized")
 
   average_loss = 0
+  g = generate_batch(data, batch_size, num_skips, skip_window)
   for step in xrange(num_steps):
-    batch_inputs, batch_labels = generate_batch(
-        batch_size, num_skips, skip_window)
+    batch_inputs, batch_labels = next(g)
     feed_dict = {train_inputs : batch_inputs, train_labels : batch_labels}
 
     # We perform one update step by evaluating the optimizer op (including it
